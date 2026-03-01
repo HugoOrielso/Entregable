@@ -26,6 +26,73 @@ Sistema completo que obtiene información de lanzamientos espaciales desde la AP
 
 ---
 
+## 📂 Estructura del proyecto
+
+### Lambda (`lambda-handler`)
+```
+lambda-handler/
+├── .github/                  # Workflows de GitHub Actions
+├── test/                     # Tests unitarios con pytest
+│   └── test_lambda_function.py
+├── venv/                     # Entorno virtual Python
+├── cloudformation.md         # Guía completa de despliegue
+├── conftest.py               # Configuración de pytest
+├── infrastructure.yml        # CloudFormation (DynamoDB, Lambda, IAM, EventBridge)
+├── lambda_function.py        # Código principal de la Lambda
+├── requirements.txt          # Dependencias de producción
+└── requirements-dev.txt      # Dependencias de desarrollo/testing
+```
+
+### Backend (`spacex-backend`)
+```
+spacex-backend/
+├── .github/                  # Workflows de GitHub Actions
+├── src/
+│   ├── controllers/          # Controladores Express
+│   ├── database/
+│   │   └── db.ts             # Cliente DynamoDB y queries
+│   ├── docs/
+│   │   └── swagger.ts        # Configuración de Swagger
+│   ├── lib/
+│   │   └── types.ts          # Tipos TypeScript
+│   └── routes/
+│       └── launches.routes.ts # Definición de rutas
+├── test/
+│   └── launches.controller.test.ts
+├── index.ts                  # Entry point
+├── server.ts                 # Configuración Express
+├── Dockerfile                # Imagen Docker
+├── task-definition.json      # ECS Task Definition
+├── arquitectura.md           # Documentación de arquitectura
+└── package.json
+```
+
+### Frontend (`spacex-frontend`)
+```
+spacex-frontend/
+├── .github/                  # Workflows de GitHub Actions
+├── src/
+│   ├── app/
+│   │   ├── launches/         # Página de lanzamientos
+│   │   ├── layout.tsx        # Layout principal
+│   │   └── page.tsx          # Página principal
+│   ├── components/
+│   │   ├── common/           # Componentes reutilizables
+│   │   ├── Launches/         # Componentes de lanzamientos
+│   │   └── main/             # Componentes principales
+│   ├── lib/
+│   │   ├── api/              # Llamadas al backend
+│   │   ├── types/            # Tipos TypeScript
+│   │   └── ui-helper.ts      # Helpers de UI
+│   └── store/                # Estado global
+├── public/                   # Assets estáticos
+├── Dockerfile                # Imagen Docker
+├── next.config.ts            # Configuración Next.js
+└── package.json
+```
+
+---
+
 ## 🏗️ Arquitectura
 
 ```
@@ -41,7 +108,7 @@ Amazon DynamoDB (spaces_launches_spacex-infra)
 Backend API (Node.js + TypeScript / ECS Fargate)
         │
         ▼
-Frontend React (ECS Fargate)
+Frontend Next.js (ECS Fargate)
 
 GitHub Actions (CI/CD)
 ├── Pipeline Lambda  → Test → Deploy a AWS Lambda
@@ -49,14 +116,14 @@ GitHub Actions (CI/CD)
 └── Pipeline Frontend → Build → ECR → ECS Fargate
 ```
 
-### Componentes e interacción
+### Cómo interactúan los componentes
 
 | Componente | Tecnología | Responsabilidad |
 |-----------|-----------|-----------------|
 | Lambda | Python 3.11 | Extrae datos de SpaceX cada 6h y hace upsert en DynamoDB |
 | DynamoDB | AWS DynamoDB | Almacena todos los lanzamientos espaciales |
 | Backend | Node.js + Express + TypeScript | API REST que lee DynamoDB y expone los datos |
-| Frontend | React | Visualiza los datos con filtros y gráficos |
+| Frontend | Next.js + React | Visualiza los datos con filtros y gráficos |
 | CloudFormation | `infrastructure.yml` | Define DynamoDB, Lambda, EventBridge, IAM Roles |
 | GitHub Actions | 3 workflows | CI/CD automatizado para cada módulo |
 
@@ -83,13 +150,14 @@ GitHub Actions (CI/CD)
 
 ## 🚀 Despliegue desde cero
 
+> Guía completa con todos los pasos detallados disponible en [`lambda-handler/cloudformation.md`](https://github.com/HugoOrielso/lambda-handler)
+
 ### Prerrequisitos
 
 - AWS CLI v2 configurado (`aws configure`)
 - Docker instalado
 - Node.js 20+
 - Python 3.11+
-- Git
 
 ### Paso 1 — Clonar los repositorios
 
@@ -139,21 +207,19 @@ aws iam put-role-policy \
   }'
 ```
 
-### Paso 5 — Obtener ARN del secreto y actualizar task-definition
+### Paso 5 — Actualizar task-definition y desplegar backend
 
 ```bash
+cd spacex-backend
+
+# Obtener ARN del secreto y actualizar task-definition
 SECRET_ARN=$(aws secretsmanager describe-secret \
   --secret-id spacex-backend-secrets \
   --region us-east-2 \
   --query 'ARN' --output text)
-
-cd spacex-backend
 sed -i "s|spacex-backend-secrets-[A-Za-z0-9]*|${SECRET_ARN##*:secret:}|g" task-definition.json
-```
 
-### Paso 6 — Registrar task-definition y desplegar backend
-
-```bash
+# Registrar y desplegar
 aws ecs register-task-definition \
   --cli-input-json file://task-definition.json \
   --region us-east-2
@@ -166,18 +232,16 @@ aws ecs update-service \
   --region us-east-2
 ```
 
-### Paso 7 — Desplegar Lambda con GitHub Actions
+### Paso 6 — Desplegar Lambda y Frontend via GitHub Actions
 
-Haz push a `main` en el repositorio `lambda-handler` o dispara el workflow manualmente desde GitHub Actions. El pipeline corre los tests y despliega automáticamente.
+Haz push a `main` en cada repositorio o dispara los workflows manualmente desde GitHub Actions.
 
-### Paso 8 — Verificar el sistema
+### Paso 7 — Verificar
 
 ```bash
 curl http://spacex-backend-alb-574561858.us-east-2.elb.amazonaws.com/health
 curl http://spacex-backend-alb-574561858.us-east-2.elb.amazonaws.com/launches
 ```
-
-> Para el proceso completo de redespliegue desde cero ver [`lambda-handler/cloudformation.md`](https://github.com/HugoOrielso/lambda-handler).
 
 ---
 
@@ -187,20 +251,16 @@ curl http://spacex-backend-alb-574561858.us-east-2.elb.amazonaws.com/launches
 
 ```bash
 cd lambda-handler
-
-# Instalar dependencias
 python -m pip install -r requirements-dev.txt
-
-# Correr tests con cobertura
 python -m pytest test/test_lambda_function.py -v \
   --cov=lambda_function \
   --cov-report=term-missing \
   --cov-fail-under=80
 ```
 
-**Resultado esperado:** 17 tests pasando, 97.75% de cobertura ✅
+**Resultado:** 17 tests pasando, 97.75% de cobertura ✅
 
-### Backend (Node.js)
+### Backend (Node.js + TypeScript)
 
 ```bash
 cd spacex-backend
@@ -228,33 +288,28 @@ curl http://localhost:4000/launches
 
 ## 🔁 Pipeline CI/CD
 
-### Pipeline Lambda (`lambda-handler/.github/workflows/deploy-lambda.yml`)
-
-Se activa con push a `main` que modifique `lambda_function.py`, `requirements.txt` o `test/**`.
+### Pipeline Lambda
 
 ```
-Push a main
+Push a main (lambda-handler)
     │
     ▼
 JOB: test
   → Setup Python 3.11
   → pip install requirements + dev
   → pytest con cobertura mínima 80%
-        │ (solo si pasa)
+        │
         ▼
 JOB: deploy
   → Configurar AWS CLI
   → Build .zip del código
   → aws lambda update-function-code
-  → Verificar despliegue
 ```
 
-### Pipeline Backend (`spacex-backend/.github/workflows/deploy-backend.yml`)
-
-Se activa con push a `main`.
+### Pipeline Backend
 
 ```
-Push a main
+Push a main (spacex-backend)
     │
     ▼
   → Login a Amazon ECR
@@ -265,31 +320,25 @@ Push a main
   → Esperar estabilización
 ```
 
-### Pipeline Frontend (`spacex-frontend/.github/workflows/deploy-frontend.yml`)
+### Pipeline Frontend
 
-Mismo flujo que el backend — Build → ECR → ECS Fargate.
+```
+Push a main (spacex-frontend)
+    │
+    ▼
+  → Login a Amazon ECR
+  → Build imagen Docker (Next.js)
+  → Push imagen a ECR
+  → Deploy en ECS Fargate
+```
 
-### Secrets requeridos en GitHub
-
-Configurar en **Settings → Secrets and variables → Actions** en cada repositorio:
+### Secrets requeridos en GitHub (cada repo)
 
 | Secret | Valor |
 |--------|-------|
 | `AWS_ACCESS_KEY_ID` | Access Key del usuario IAM |
 | `AWS_SECRET_ACCESS_KEY` | Secret Key del usuario IAM |
 | `AWS_REGION` | `us-east-2` |
-
-### Extender el pipeline
-
-Para agregar nuevos pasos al pipeline basta con editar el archivo `.github/workflows/deploy-*.yml` correspondiente. Por ejemplo, para agregar notificaciones de Slack al finalizar el deploy:
-
-```yaml
-- name: Notify Slack
-  if: always()
-  uses: 8398a7/action-slack@v3
-  with:
-    status: ${{ job.status }}
-```
 
 ---
 
@@ -298,26 +347,11 @@ Para agregar nuevos pasos al pipeline basta con editar el archivo `.github/workf
 | Método | Endpoint | Descripción |
 |--------|----------|-------------|
 | GET | `/health` | Estado del servicio |
-| GET | `/launches` | Lista todos los lanzamientos (filtros: status, year, search, limit, offset) |
+| GET | `/launches` | Lista lanzamientos (filtros: status, year, search, limit, offset) |
 | GET | `/launches/:id` | Detalle de un lanzamiento |
-| GET | `/stats/summary` | Resumen estadístico (total, success, failed, upcoming) |
+| GET | `/stats/summary` | Resumen estadístico total/success/failed/upcoming |
 | GET | `/stats/by-year` | Estadísticas agrupadas por año |
 | GET | `/api-docs` | Swagger UI interactivo |
-
-### Ejemplo de respuesta `/launches`
-
-```json
-[
-  {
-    "launch_id": "5eb87cd9ffd86e000604b32a",
-    "mission_name": "FalconSat",
-    "date_utc": "2006-03-24T22:30:00.000Z",
-    "status": "failed",
-    "rocket_id": "5e9d0d95eda69955f709d1eb",
-    "details": "Engine failure at 33 seconds..."
-  }
-]
-```
 
 ---
 
@@ -331,7 +365,7 @@ Para agregar nuevos pasos al pipeline basta con editar el archivo `.github/workf
 | `date_utc` | String (GSI) | Fecha UTC del lanzamiento |
 | `status` | String | upcoming / success / failed / unknown |
 | `rocket_id` | String | ID del cohete |
-| `launchpad_id` | String | ID de la plataforma |
+| `launchpad_id` | String | ID de la plataforma de lanzamiento |
 | `details` | String | Descripción del lanzamiento |
 | `patch_small` | String | URL del parche de la misión |
 | `article` | String | Link al artículo |
@@ -343,10 +377,11 @@ Para agregar nuevos pasos al pipeline basta con editar el archivo `.github/workf
 
 | Documento | Descripción |
 |-----------|-------------|
-| [`lambda-handler/README.md`](https://github.com/HugoOrielso/lambda-handler) | Detalle de la Lambda, tests y pipeline |
-| [`lambda-handler/cloudformation.md`](https://github.com/HugoOrielso/lambda-handler) | Guía completa de despliegue de infraestructura |
-| [`spacex-backend/README.md`](https://github.com/HugoOrielso/spacex-backend) | Detalle del backend, task-definition y ECS |
-| [`spacex-frontend/README.md`](https://github.com/HugoOrielso/spacex-frontend) | Detalle del frontend y despliegue |
+| [`lambda-handler/cloudformation.md`](https://github.com/HugoOrielso/lambda-handler) | Guía completa de despliegue de infraestructura y redeploy desde cero |
+| [`spacex-backend/arquitectura.md`](https://github.com/HugoOrielso/spacex-backend) | Documentación de arquitectura del backend |
+| [`spacex-backend/README.md`](https://github.com/HugoOrielso/spacex-backend) | Detalle del backend y ECS |
+| [`lambda-handler/README.md`](https://github.com/HugoOrielso/lambda-handler) | Detalle de la Lambda y tests |
+| [`spacex-frontend/README.md`](https://github.com/HugoOrielso/spacex-frontend) | Detalle del frontend |
 
 ---
 
