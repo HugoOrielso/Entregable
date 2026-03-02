@@ -12,7 +12,7 @@ Sistema completo que obtiene información de lanzamientos espaciales desde la AP
 | **Backend API** | http://spacex-backend-alb-574561858.us-east-2.elb.amazonaws.com |
 | **Swagger UI** | http://spacex-backend-alb-574561858.us-east-2.elb.amazonaws.com/api-docs |
 | **Health Check** | http://spacex-backend-alb-574561858.us-east-2.elb.amazonaws.com/health |
-| **Lambda URL** | https://x2j244r7gcqo4bljyuqnwifayi0ruvxm.lambda-url.us-east-2.on.aws/ |
+| **Lambda URL** | https://ijkudn6zzsaz5dvkrraiyy3gcu0jpows.lambda-url.us-east-2.on.aws/ |
 
 ---
 
@@ -117,6 +117,55 @@ GitHub Actions (CI/CD)
 ```
 
 ### Cómo interactúan los componentes
+
+```
+┌─────────────────────────────────────────────────────┐
+│                   CAPA DE INGESTA                    │
+│                                                      │
+│  EventBridge ──► Lambda (Python)                     │
+│                      │                               │
+│                      ▼                               │
+│               SpaceX API v4/launches                 │
+│                      │                               │
+│                      ▼                               │
+│               DynamoDB (upsert)                      │
+└──────────────────────┬──────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────┐
+│                   CAPA DE SERVICIO                   │
+│                                                      │
+│  DynamoDB ──► Backend (Node.js + Express)            │
+│                      │                               │
+│               Secrets Manager                        │
+│               (TABLE_NAME, PORT)                     │
+└──────────────────────┬──────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────┐
+│                   CAPA DE PRESENTACIÓN               │
+│                                                      │
+│  Backend API ──► Frontend (Next.js + React)          │
+│                      │                               │
+│               ALB (Load Balancer)                    │
+│               Usuario final                          │
+└─────────────────────────────────────────────────────┘
+```
+
+**Flujo completo de un dato:**
+
+1. **EventBridge** dispara la Lambda cada 6 horas
+2. **Lambda** llama a `api.spacexdata.com/v4/launches`
+3. Lambda transforma y hace **upsert en DynamoDB**
+4. **Backend** expone los datos via REST API leyendo DynamoDB
+5. **Frontend** consume el backend y renderiza los datos al usuario
+6. El usuario puede filtrar, paginar y ver detalles de cada lanzamiento
+
+**Separación de responsabilidades:**
+
+| Componente | Escribe en DynamoDB | Lee de DynamoDB |
+|-----------|-------------------|----------------|
+| Lambda | ✅ | ❌ |
+| Backend | ❌ | ✅ |
+| Frontend | ❌ | ❌ (solo consume el backend) |
 
 | Componente | Tecnología | Responsabilidad |
 |-----------|-----------|-----------------|
@@ -288,6 +337,10 @@ curl http://localhost:4000/launches
 
 ## 🔁 Pipeline CI/CD
 
+### Cómo funciona
+
+Tienes **3 pipelines independientes**, uno por módulo:
+
 ### Pipeline Lambda
 
 ```
@@ -298,12 +351,17 @@ JOB: test
   → Setup Python 3.11
   → pip install requirements + dev
   → pytest con cobertura mínima 80%
-        │
+        │ (solo si tests pasan)
         ▼
 JOB: deploy
   → Configurar AWS CLI
+  → Guardar versión actual como punto de restauración (rollback)
   → Build .zip del código
-  → aws lambda update-function-code
+  → Deploy a Lambda
+  → Esperar actualización
+  → Smoke test (invoca y verifica 200)
+      ├─ ✅ OK → deploy exitoso
+      └─ ❌ Falla → rollback automático a versión anterior
 ```
 
 ### Pipeline Backend
@@ -330,6 +388,32 @@ Push a main (spacex-frontend)
   → Build imagen Docker (Next.js)
   → Push imagen a ECR
   → Deploy en ECS Fargate
+```
+
+### Rollback automático (Lambda)
+
+Antes de cada deploy el pipeline publica una **versión numerada** de la Lambda actual como snapshot. Después del deploy corre un smoke test que invoca la Lambda y verifica que responde `200`. Si falla, el pipeline restaura automáticamente la versión anterior sin intervención manual.
+
+### Cómo extender el pipeline
+
+Para agregar pasos nuevos solo editas el `.yml` correspondiente en `.github/workflows/`. Ejemplos:
+
+```yaml
+# Agregar notificación de Slack al finalizar
+- name: Notify Slack
+  if: always()
+  uses: 8398a7/action-slack@v3
+  with:
+    status: ${{ job.status }}
+
+# Agregar análisis de seguridad
+- name: Security scan
+  uses: snyk/actions/python@master
+
+# Separar entornos dev/prod
+- name: Deploy
+  env:
+    ENV: ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
 ```
 
 ### Secrets requeridos en GitHub (cada repo)
